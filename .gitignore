@@ -1,0 +1,48 @@
+# prerequisites
+*.d
+
+# compiled object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# precompiled headers
+*.gch
+*.pch
+
+# compiled dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# fortran module files
+*.mod
+*.smod
+
+# compiled static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# executables
+*.exe
+*.out
+*.app
+
+# debug data
+*.pdb
+*.rdi
+
+# metaprogramming build files
+*.exp
+
+# build folder
+.build
+
+# sound files (for now)
+*.wav
+
+# config files
+*.ini
