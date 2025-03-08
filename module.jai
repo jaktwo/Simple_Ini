@@ -1,172 +1,351 @@
-// @FILE: module.jai
-// @AUTHOR: jak2 <jak2@clover-work.shop>
+//
+// This INI file module is designed to be simple to use and understand. This means no subsections and no multiline
+// values, just simple name-value pairs inside sections.
+// 
+// Quotation marks at the start and end of a value will be removed, and comment indicators hold precedence over quotation
+// marks.
+//
+// A sequence of two or more whitespaces in a value will render any following characters into comments and they will
+// therefore be ignored. This is by design to keep things easy to both parse and read.
+//
+// Values are always read as strings, the user has to provide the type when requesting values, and they could potentially
+// be incorrectly interpreted.
+//
+// Comments should be preceded by whitespace or horizontal tabulations. Otherwise they will be interpeted as part of the
+// value.
+//
+// ".ini"  files should be kept simple and for simple purposes. If you need multiline values, complex strings or
+// subsections, you probably should be using some other format. Use this module to save simple data that you want users
+// to have an easy time at modifying. I would use this to save things like audio volumes, screen size and keymap
+// bindings in a 2D computer game :) - jak, 7 March 2025
+//
 
 Ini_File :: struct {
-    path_with_filename: string;
     table: Table(string, Table(string, string));
 }
 
-// if the file does not exist, it is created and the value of existed indicates this
-read_ini_file :: (path_to_file: string) -> ini_file: Ini_File #must, existed: bool, success: bool {
-    ini_file: Ini_File;  
+Parsing_Error :: enum s8 {
+    OK                    ::  0;
+    DUPLICATE_SECTION     :: -1;
+    DUPLICATE_NAME        :: -2;
+    INVALID_CHAR_SECTION  :: -3;
+    INVALID_CHAR_NAME     :: -4;
+    INCOMPLETE_SECTION    :: -5;
+    INCOMPLETE_NAME       :: -6;
+    ESCAPE_SEQUENCE_VALUE :: -7;
+}
 
-    existed := true;
-    
-    success := true;
-    
-    if !file_exists(path_to_file) {
-	write_entire_file(path_to_file, "");
+reset :: (file: *Ini_File) {
+    table_reset(*file.table);
+}
 
-	existed = false;
+read_ini_file :: (path: string) -> file: Ini_File #must, error: Parsing_Error {
+    file: Ini_File;
+    
+    ini_file_contents: string;
+
+    error: Parsing_Error = .OK;
+
+    if file_exists(path) {
+	ini_file_contents = read_entire_file(path);
     }
 
-    ini_file_contents := read_entire_file(path_to_file);
-
-    key_builder: String_Builder;
-
-    value_builder: String_Builder;
-    
-    section_builder: String_Builder;
-    append(*section_builder, "global");
+    parsing: Parsing_State = .NEW_ITEM;
 
     values_table: Table(string, string);
 
-    parsing: Parsing_File = .NOTHING;
-    
+    section_builder: String_Builder;
+    name_builder:    String_Builder;
+    value_builder:   String_Builder;
+
+    append(*section_builder, "global");
+
     for ini_file_contents {
-	if it == #char " " then continue;
-	
 	if parsing == {
-	    case .NOTHING;
-	        if it == #char "\n" then parsing = .KEY;
+	    case .NEW_ITEM;
+	    if it == #char "[" {
+		parsing = .SECTION;
 
-	    case .KEY;
-	        if it == {
-		    case #char "[";
-		        if values_table.count > 0 then table_add(
-			    *ini_file.table,
-			    builder_to_string(*section_builder, do_reset=false),
-			    values_table
-			);
+		section := builder_to_string(*section_builder);
+
+		if table_contains(*file.table, section) {
+		    error = .DUPLICATE_SECTION;
+
+		    reset(*file);
 		    
-		        reset(*section_builder);
-		    
-		        parsing = .SECTION;
-
-		        continue;
-	    
-	            case #char ";";
-		        if key_builder.current_buffer.count > 0 {
-			    parsing = .NOTHING;
-			    continue;
-                        }
-		    
-		        #through;
-
-	            case #char "=";
-		        if key_builder.current_buffer.count > 0 {
-			    parsing = .VALUE;
-			    continue;
-			}
-
-		        #through;
-
-                    case #char "\n";
-		        if key_builder.current_buffer.count > 0 {
-		            print("Error while parsing key: ");
-			    print("unexpected escape sequence before value assignment ");
-                            print("(key name found:\"%\").\n", builder_to_string(*key_builder));
-		    
-		            break;
-		        }
+		    break;
 		}
+		
+		if values_table.count > 0 {
+		    table_add(*file.table, section, values_table);
 
-	        append(*key_builder, it);
+		    table_reset(*values_table);
+		}
+	    }
+
+	    else if it == 13 || it == 10 { }
+
+	    else if it == #char ";" || it == #char "#" then parsing = .COMMENT;
+
+	    else if (it >= 65 && it <= 90) || (it >= 97 && it <= 122) || it == #char "_" {
+		parsing = .NAME;
+
+		append(*name_builder, it);
+	    }
+
+	    else if it_index == ini_file_contents.count - 1 {
+		section := builder_to_string(*section_builder);
+
+		if table_contains(*file.table, section) {
+		    error = .DUPLICATE_SECTION;
+
+		    reset(*file);
+		    
+		    break;
+		}
+		
+		if values_table.count > 0 {
+		    table_add(*file.table, section, values_table);
+
+		    table_reset(*values_table);
+		}
+	    }
+
+	    else {
+		error = .INVALID_CHAR_NAME;
+
+		reset(*file);
+
+		break;
+	    }
+
+	    case .COMMENT;
+	    if it == 10 || it == 13 then parsing = .NEW_ITEM;
 
 	    case .SECTION;
-	        if it == {
-		    case #char "]";
-		        parsing = .KEY;
-    
-		        continue;
+	    if it == #char "]" then parsing = .NEW_ITEM;
 
-	            case #char "\n";
-		        print("Error while parsing section: ");
-		        print("unexpected escape sequence before closing bracket ");
-                        print("(section name found: \"%\").\n", builder_to_string(*section_builder));
+	    else if (it >= 65 && it <= 90) || (it >= 97 && it <= 122) || it == #char "_" {
+		append(*section_builder, it);
+	    }
 
-		        break;
+	    else {
+		error = .INVALID_CHAR_SECTION;
+
+		reset(*file);
+
+		break;
+	    }
+
+	    case .NAME;
+	    if (it >= 65 && it <= 90) || (it >= 97 && it <= 122) || it == #char "_" {		
+		append(*name_builder, it);
+	    }
+
+	    else if it == #char "=" {
+		parsing = .VALUE;
+	    }
+
+	    else {
+		error = .INVALID_CHAR_NAME;
+
+		reset(*file);
+
+		break;
+	    }
+
+	    case .VALUE;
+	    previous_char_was_whitespace := false;
+	    
+	    if it == #char " " {
+		if previous_char_was_whitespace {
+		    parsing = .COMMENT;
+
+		    if value_builder.initialized {
+			name := builder_to_string(*name_builder);
+
+			if table_contains(*values_table, name) {
+			    error = .DUPLICATE_NAME;
+
+			    reset(*file);
+
+			    break;
+			}
+
+			table_add(*values_table, name, builder_to_string(*value_builder));
+		    }
 		}
 
-	        append(*section_builder, it);
+		else previous_char_was_whitespace = true;
+	    }
 
-            case .VALUE;
-	        if it == {
-		    case #char ";";
-		        #through;
+	    else if it == 9 {
+		parsing = .COMMENT;
 
-	            case #char "#";
-		        parsing = .NOTHING;
-		        #through;
+		if value_builder.initialized {
+		    name := builder_to_string(*name_builder);
 
-	            case #char "\n";
-		        table_add(*values_table, builder_to_string(*key_builder), builder_to_string(*value_builder));
-		    
-		        reset(*key_builder);
-		        reset(*value_builder);		    
+		    if table_contains(*values_table, name) {
+			error = .DUPLICATE_NAME;
 
-		        parsing = .KEY;
-		    
-		        continue;   
-	        }
-	    
-	        append(*value_builder, it);
+			reset(*file);
+
+			break;
+		    }
+
+		    table_add(*values_table, name, builder_to_string(*value_builder));
+		}
+	    }
+
+	    else if previous_char_was_whitespace && (it == #char ";" || it == #char "#") {
+		parsing = .COMMENT;
+
+		if value_builder.initialized {
+		    name := builder_to_string(*name_builder);
+
+		    if table_contains(*values_table, name) {
+			error = .DUPLICATE_NAME;
+
+			reset(*file);
+
+			break;
+		    }
+
+		    table_add(*values_table, name, builder_to_string(*value_builder));
+		}
+	    }
+
+	    else if it == 10 || it == 13 {
+		parsing = .NEW_ITEM;
+
+		if value_builder.initialized {
+		    name := builder_to_string(*name_builder);
+
+		    if table_contains(*values_table, name) {
+			error = .DUPLICATE_NAME;
+
+			reset(*file);
+
+			break;
+		    }
+
+		    table_add(*values_table, name, builder_to_string(*value_builder));
+		}
+	    }
+
+	    else {
+		if previous_char_was_whitespace then append(*value_builder, " ");
+
+		append(*value_builder, it);
+	    }
 	}
+
+	if it_index == ini_file_contents.count - 1 {
+	    if parsing == {
+		case .NEW_ITEM;
+		section := builder_to_string(*section_builder);
+		
+		if table_contains(*file.table, section) {
+		    error = .DUPLICATE_SECTION;
+
+		    reset(*file);
+
+		    break;
+		}
+		
+		case .SECTION;
+		error = .INCOMPLETE_SECTION;
+
+		reset(*file);
+		
+		break;
+
+		case .NAME;
+		error = .INCOMPLETE_NAME;
+
+		reset(*file);
+		
+		break;
+
+		case .VALUE;
+		section := builder_to_string(*section_builder);
+		
+		if table_contains(*file.table, section) {
+		    error = .DUPLICATE_SECTION;
+
+		    reset(*file);
+
+		    break;
+		}
+
+		name := builder_to_string(*name_builder);
+
+		if table_contains(*values_table, name) {
+		    error = .DUPLICATE_NAME;
+
+		    reset(*file);
+
+		    break;
+		}
+
+		table_add(*values_table, name, builder_to_string(*value_builder));
+
+		table_add(*file.table, section, values_table);
+
+		table_reset(*values_table);
+	    }
+	}
+    }    
+
+    return file, error;
+}
+
+main :: () {
+    ini_file, error := read_ini_file("./tests/correct.ini");
+
+    for ini_file.table {
+	print("%\n", it);
     }
 
-    return ini_file, existed, success;
-}
+    if error == {
+	case .OK;
+	print("Went ok!\n");
 
-set_value :: (file: *Ini_File, name: string, value: $T) -> success: bool {
+	case .DUPLICATE_SECTION;
+	print("Oops! Duplicate section!\n");
 
-}
+	case .DUPLICATE_NAME;
+	print("Oops! Duplicate name!\n");
 
-set_value_in_section :: (file: *Ini_File, name: string, value: $T) -> success: bool {
+	case .INVALID_CHAR_SECTION;
+	print("Oops! Invalid character while parsing section!\n");
 
-}
+	case .INVALID_CHAR_NAME;
+	print("Oops! Invalid character while parsing name!\n");
 
-get_value_from_section_as :: (file: *Ini_File, key: string, section: string, $T: Type = int)
-    -> is_valid: bool, value: T {
+	case .INCOMPLETE_SECTION;
+	print("Oops! Found an incomplete section!\n");
 
-}
+	case .INCOMPLETE_NAME;
+	print("Oops! Found an incomplete name!\n");
 
-get_value_as :: (file: *Ini_File, key: string, $T: Type = int) -> is_valid: bool, value: T {
-    
-}
-
-write_ini_file :: (file: *Ini_File, do_reset := false) {
-
-}
-
-write_ini_file :: (file: *Ini_File, new_path: string, do_reset := false) {
-
-}
-
-// testing
-main :: () {
-    ini_file: Ini_File = read_ini_file("./config.ini");
+	case .ESCAPE_SEQUENCE_VALUE;
+	print("Oops! Escape sequences in values are not allowed!\n");
+    }
 }
 
 #scope_file
 
-Parsing_File :: enum u8 {
-    NOTHING;
-    KEY;
-    VALUE;
+Parsing_State :: enum u8 {
+    NEW_ITEM;
+    COMMENT;
     SECTION;
+    NAME;
+    VALUE;
 }
 
 #import "Basic";
 #import "File";
 #import "File_Utilities";
 #import "Hash_Table";
+#import "String";
